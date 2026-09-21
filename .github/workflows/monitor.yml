@@ -1,0 +1,76 @@
+name: monitor
+
+on:
+  # schedule:                        # enabled after selftest + baseline are confirmed by the user
+  #   - cron: '37 * * * *'           # hourly at :37 UTC (off-peak minute). Decided after billed minutes are measured.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: monitor = full run; dry-run = fetch+diff, no writes/alerts; discovery = probe the site; selftest = one assigned test issue
+        type: choice
+        options: [monitor, dry-run, discovery, selftest]
+        default: monitor
+      forget_refs:
+        description: comma-separated unit refs to drop from the ledger before the run (forces NEW alerts for testing)
+        type: string
+        default: ''
+      reset_ledger:
+        description: delete state/seen.json before the run (forces a fresh BASELINE)
+        type: boolean
+        default: false
+      source_host:
+        description: override source host (failure simulation only, e.g. https://invalid.example)
+        type: string
+        default: ''
+
+permissions:
+  contents: write        # commit state/ back
+  issues: write          # alert / health channel
+
+concurrency:
+  group: wasl-monitor
+  cancel-in-progress: false   # never kill a run between alert and commit
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10          # job default is 360; a hung run would burn 18% of the monthly quota
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.62.0-noble   # MUST equal playwright== in requirements.txt
+      options: --ipc=host
+    env:
+      WASLMON_MODE: ${{ inputs.mode || 'monitor' }}
+      WASLMON_FORGET_REFS: ${{ inputs.forget_refs }}
+      WASLMON_RESET_LEDGER: ${{ inputs.reset_ledger }}
+      WASLMON_SOURCE_HOST: ${{ inputs.source_host }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PIP_BREAK_SYSTEM_PACKAGES: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Trust workspace (container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Environment census
+        if: env.WASLMON_MODE == 'discovery'
+        run: |
+          python3 --version
+          python3 -m pip --version || python3 -m ensurepip --upgrade
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH"
+          ls "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}" || true
+
+      - name: Install
+        run: python3 -m pip install --no-cache-dir -r requirements.txt
+
+      - name: Freeze
+        if: env.WASLMON_MODE == 'discovery'
+        run: python3 -m pip freeze
+
+      - name: Run
+        run: python3 -m waslmon
+
+      - name: Commit state
+        if: always()
+        run: sh scripts/commit_state.sh

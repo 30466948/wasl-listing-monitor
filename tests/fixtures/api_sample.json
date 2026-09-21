@@ -1,0 +1,8 @@
+{"data": {"total": 2, "items": [
+  {"unitRef": "IM00100279345", "buildingText": "wasl Village - Building 35", "buildingName": "R1083-35",
+   "unitNo": "101", "unitType": "F2B", "bedrooms": "2 Bedroom Large", "price": "47000", "size": "794",
+   "locationText": "Al Qusais Ind. Fifth", "contactEmail": "agent@example.com"},
+  {"unitRef": "IM00100280227", "buildingText": "wasl Village - Building 19", "buildingName": "R1083-19",
+   "unitNo": "305", "unitType": "F2B", "bedrooms": "2 Bedrooms (extra large)", "price": "62000", "size": "1084",
+   "locationText": "Al Qusais Ind. Fifth", "contactEmail": "agent@example.com"}
+]}}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "armed_at": null,
+  "interval_hours": 1,
+  "consecutive_failures": 0,
+  "last_run_started_at": null,
+  "last_run_status": null,
+  "last_failure_reason": null,
+  "last_success_at": null,
+  "broken_alert_sent_at": null,
+  "recovered_pending": false,
+  "last_heartbeat_sent_on": null,
+  "last_gap_hours": null,
+  "run_history": []
+}

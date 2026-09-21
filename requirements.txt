@@ -1,0 +1,10 @@
+# Direct runtime dependencies. Exact pins; requirements.lock.txt is the full frozen set.
+# playwright MUST equal the container image tag in .github/workflows/monitor.yml
+# (mcr.microsoft.com/playwright/python:v1.62.0-noble). Bump both in ONE commit or the
+# browsers baked into /ms-playwright will not match and every run fails.
+playwright==1.62.0
+requests==2.34.2
+beautifulsoup4==4.15.0
+pydantic==2.13.5
+PyYAML==6.0.3
+tzdata==2026.4

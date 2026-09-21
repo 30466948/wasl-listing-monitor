@@ -1,0 +1,30 @@
+name: watchdog
+
+# Independent liveness check. Shares no fetch code with the monitor: it only reads
+# state/health.json and talks to the GitHub API with the standard library.
+on:
+  schedule:
+    - cron: '11 5 * * *'      # daily 05:11 UTC = 09:11 Asia/Dubai
+  workflow_dispatch:
+    inputs:
+      stale_hours:
+        description: hours without a successful monitor run before raising an issue
+        type: string
+        default: '4'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check monitor liveness
+        run: python3 -m waslmon.watchdog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WATCHDOG_STALE_HOURS: ${{ inputs.stale_hours || '4' }}
+          PYTHONUNBUFFERED: '1'

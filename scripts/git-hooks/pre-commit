@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pre-commit security gate for wasl-listing-monitor.
+# Blocks secret-looking filenames and known secret token formats. This project needs
+# no secrets at all, so anything matching here is a mistake.
+fail=0
+
+if git diff --cached --name-only \
+   | grep -iE '(^|/)\.env(\..*)?$|credentials.*\.json$|token.*\.json$|client_secret|\.(pem|key|pfx|p12|ppk)$' \
+   | grep -v '\.env\.example' >/dev/null; then
+  echo "BLOCKED: staged filename matches a secret/sensitive pattern." >&2
+  fail=1
+fi
+
+if git diff --cached \
+   | grep -E 'GOCSPX-[A-Za-z0-9_-]+|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|github_pat_[A-Za-z0-9_]{20,}|gh[opusr]_[A-Za-z0-9]{36,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ya29\.[A-Za-z0-9_-]{20,}|1//[A-Za-z0-9_-]{20,}|(APP_PASSWORD|SMTP_PASS[A-Z_]*)\s*[=:]\s*["'"'"']?[A-Za-z0-9]{16}' >/dev/null; then
+  echo "BLOCKED: staged content matches a known secret token format." >&2
+  fail=1
+fi
+
+exit $fail

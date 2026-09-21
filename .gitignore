@@ -1,0 +1,40 @@
+# --- Secrets & credentials (none are needed by this project; defence in depth) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.ppk
+credentials*.json
+token*.json
+client_secret*.json
+service_account*.json
+.netrc
+
+# --- Raw dumps never belong in git (may contain page content / cookies) ---
+debug/
+artifacts/
+*.har
+*.png
+*.html
+!tests/fixtures/*.html
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# --- OS noise ---
+Thumbs.db
+desktop.ini
+~$*
+*.tmp

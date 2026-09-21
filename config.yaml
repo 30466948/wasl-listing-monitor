@@ -1,0 +1,88 @@
+# wasl-listing-monitor configuration
+# Every tunable lives here. Fields marked "set after discovery" are null until the
+# discovery run (workflow_dispatch mode=discovery) shows what the live site returns.
+schema_version: 1
+
+source:
+  host: https://www.wasl.ae
+  search_path: /en/search/residential
+  # VERIFIED query parameters only (seen in indexed wasl URLs). Never add guessed
+  # params such as price_max / sortfield: a silently ignored filter is a silent miss.
+  params:
+    community: wasl-village
+    room: "2"
+    usage: APARTMENT
+  # Broad control query: proves the site is really answering before we trust a
+  # small/empty result for the narrow query.
+  control_params:
+    usage: APARTMENT
+  control_min_total: 100
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+  min_seconds_between_requests: 1.0     # politeness ceiling: 1 request/second
+  request_timeout_s: 30
+  max_requests_per_run: 40
+
+filter:
+  # Scope B (user decision 2026-09-21): wasl Village, 2 bedrooms, rent <= AED 60,000.
+  # Applied in Python to every extracted record regardless of URL params.
+  bedrooms: [2]
+  max_rent_aed: 60000
+  community_contains: "wasl village"
+  usage: apartment
+  include_unclassified: true             # records whose rent/bedrooms cannot be parsed are alerted as "check manually"
+
+fetch:
+  strategy: auto                         # auto | requests | browser
+  browser:
+    wait_selector: null                  # set after discovery
+    wait_timeout_s: 20
+    api_url_pattern: null                # regex on XHR URL whose JSON holds the listings (set after discovery)
+
+extract:
+  counter_regex: '(\d[\d,]*)\s*-\s*(\d[\d,]*)\s+of\s+(\d[\d,]*)\s+records?'
+  no_results_markers: ["no results", "no properties", "no records", "nothing found", "not found"]
+  page_size: 12
+  max_pages: 20
+  pagination:
+    param: null                          # set after discovery (e.g. page)
+    mode: page                           # page | offset
+    start: 1
+  api:
+    records_path: null                   # dotted path to the list of records in the JSON (set after discovery)
+    total_path: null
+    field_map: {}                        # our field -> dotted path inside a record
+    single_page: false
+  dom:
+    card_selector: null                  # CSS selector for one listing card (set after discovery)
+    fields: {}                           # our field -> CSS selector inside the card
+  require_agreement: true
+  max_disagreement_ratio: 0.10
+  min_parse_ratio: 0.90
+
+diff:
+  anomaly_new_threshold: 15
+  mass_removal_ratio: 0.5
+  mass_removal_min_tracked: 8
+  missing_runs_before_removed: 2
+  archive_after_days: 90
+
+health:
+  fail_threshold: 3
+  broken_cooldown_hours: 24
+  interval_hours: 1                      # keep equal to the cron cadence
+  gap_multiplier: 3
+  heartbeat:
+    cadence: daily                       # daily | weekly | off
+    hour_utc: 4                          # 08:xx Asia/Dubai
+    weekday: 0                           # Monday, used when cadence=weekly
+
+notify:
+  channel: github_issue
+  baseline: true                         # user decision: one BASELINE issue on the first run
+  max_listings_per_issue: 10
+  baseline_max_listings: 40
+  labels:
+    alert: wasl-alert
+    health: monitor-health
+    status: monitor-status
+  timezone: Asia/Dubai

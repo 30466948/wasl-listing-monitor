@@ -1,0 +1,14 @@
+#!/bin/sh
+# Pre-push security gate for wasl-listing-monitor.
+fail=0
+zero=0000000000000000000000000000000000000000
+while read local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  if git ls-tree -r --name-only "$local_sha" \
+     | grep -iE '(^|/)\.env(\..*)?$|credentials.*\.json$|token.*\.json$|client_secret|\.(pem|key|pfx|p12|ppk)$' \
+     | grep -v '\.env\.example' >/dev/null; then
+    echo "BLOCKED (pre-push): $local_sha contains secret-pattern filenames." >&2
+    fail=1
+  fi
+done
+exit $fail
