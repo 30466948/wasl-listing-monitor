@@ -1,3 +1,6 @@
+# Dev tooling. Exact pins: tests.yml installs this file without a lockfile, so an unpinned
+# tool would resolve to its newest release on every run and could redden CI on an
+# unrelated commit. Verified green with these versions.
 -r requirements.txt
-pytest
-ruff
+pytest==9.1.1
+ruff==0.16.8

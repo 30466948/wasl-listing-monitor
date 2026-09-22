@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from . import __version__, log
 from .config import Settings
-from .gh_api import GitHubClient
+from .gh_api import GitHubAPIError, GitHubClient
 from .models import AlertKind, ListingRecord
 
 LABEL_COLORS = {"alert": "0e8a16", "health": "b60205", "status": "0052cc"}
@@ -59,6 +59,8 @@ def render_listing(rec: ListingRecord, tz: str) -> str:
     tail = f"  \n  [open listing]({rec.url}) - ref `{rec.ref}` - first seen {fmt_time(rec.first_seen, tz)}"
     if rec.alert_kind == "relisted" and rec.price_history and len(rec.price_history) > 1:
         tail += f" - previous rent AED {rec.price_history[-2].rent_aed:,}" if rec.price_history[-2].rent_aed else ""
+    if rec.removed_at is not None:
+        tail += " - **no longer listed at the time of this alert** (delivery was delayed)"
     return head + tail
 
 
@@ -123,17 +125,27 @@ class Notifier:
         self.client.ensure_label(lb.alert, LABEL_COLORS["alert"], "new matching listing")
         self.client.ensure_label(lb.health, LABEL_COLORS["health"], "monitor broken / recovered / watchdog")
         self.client.ensure_label(lb.status, LABEL_COLORS["status"], "daily heartbeat")
+        self.client.ensure_label(lb.selftest, LABEL_COLORS["status"], "notification path test")
         self._labels_ready = True
 
+    def _require_client(self) -> GitHubClient:
+        if self.client is None:
+            raise GitHubAPIError(0, "no GitHub client configured; refusing to pretend a notification was sent")
+        return self.client
+
     def _deliver(self, title: str, body: str, label: str) -> Optional[str]:
-        if self.dry_run or self.client is None:
+        if self.dry_run:
             log.info(f"--- would open issue: {title}")
             for line in body.splitlines():
                 log.info("    " + line)
             return None
+        client = self._require_client()
         self._labels()
-        issue = self.client.create_issue(title, body, [label])
-        return issue.get("html_url")
+        issue = client.create_issue(title, body, [label])
+        url = issue.get("html_url")
+        if not url:
+            raise GitHubAPIError(0, "issue created but no html_url returned")
+        return url
 
     # -- public ------------------------------------------------------------
     def send_listings(self, kind: AlertKind, records: list[ListingRecord]) -> Optional[str]:
@@ -141,32 +153,40 @@ class Notifier:
         body = render_alert_body(kind, records, self.settings, self.info)
         return self._deliver(title, body, self.settings.notify.labels.alert)
 
+    BROKEN_PREFIX = "[wasl] MONITOR BROKEN"
+    STATUS_PREFIX = "[wasl] monitor status"
+
     def send_health(self, title: str, body: str) -> Optional[str]:
-        if self.dry_run or self.client is None:
+        if self.dry_run:
             log.info(f"--- would upsert health issue: {title}")
             return None
+        client = self._require_client()
         self._labels()
-        issue, _ = self.client.upsert_rolling_issue(self.settings.notify.labels.health, title, body)
+        issue, _ = client.upsert_rolling_issue(self.settings.notify.labels.health, title, body,
+                                               title_prefix=self.BROKEN_PREFIX)
         return issue.get("html_url")
 
     def close_health(self, body: str) -> int:
-        if self.dry_run or self.client is None:
+        if self.dry_run:
             return 0
+        client = self._require_client()
         n = 0
-        for issue in self.client.list_open_issues(self.settings.notify.labels.health):
-            if str(issue.get("title", "")).startswith("[wasl] MONITOR BROKEN"):
-                self.client.comment(issue["number"], body)
-                self.client.close_issue(issue["number"])
+        for issue in client.list_open_issues(self.settings.notify.labels.health):
+            if str(issue.get("title", "")).startswith(self.BROKEN_PREFIX):
+                client.comment(issue["number"], body)
+                client.close_issue(issue["number"])
                 n += 1
         return n
 
     def send_heartbeat(self, body: str) -> Optional[str]:
-        if self.dry_run or self.client is None:
+        if self.dry_run:
             log.info("--- would post heartbeat")
             return None
+        client = self._require_client()
         self._labels()
-        issue, _ = self.client.upsert_rolling_issue(self.settings.notify.labels.status,
-                                                    "[wasl] monitor status (heartbeat thread)", body)
+        issue, _ = client.upsert_rolling_issue(self.settings.notify.labels.status,
+                                               f"{self.STATUS_PREFIX} (heartbeat thread)", body,
+                                               title_prefix=self.STATUS_PREFIX)
         return issue.get("html_url")
 
     def send_selftest(self) -> Optional[str]:
@@ -175,4 +195,4 @@ class Notifier:
                 "opened by the monitor and assigned to you.\n\n"
                 "Next: confirm receipt to the builder so the schedule can be enabled.\n\n"
                 f"Run: {self.info.run_url or '(local)'}")
-        return self._deliver(title, body, self.settings.notify.labels.status)
+        return self._deliver(title, body, self.settings.notify.labels.selftest)

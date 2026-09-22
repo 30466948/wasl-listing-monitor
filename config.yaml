@@ -40,13 +40,13 @@ fetch:
 
 extract:
   counter_regex: '(\d[\d,]*)\s*-\s*(\d[\d,]*)\s+of\s+(\d[\d,]*)\s+records?'
-  no_results_markers: ["no results", "no properties", "no records", "nothing found", "not found"]
+  no_results_markers: ["no results", "no properties", "no records", "0 records found"]
   page_size: 12
   max_pages: 20
   pagination:
     param: null                          # set after discovery (e.g. page)
     mode: page                           # page | offset
-    start: 1
+    start: 1                             # first page number, or first offset when mode=offset
   api:
     records_path: null                   # dotted path to the list of records in the JSON (set after discovery)
     total_path: null
@@ -85,4 +85,5 @@ notify:
     alert: wasl-alert
     health: monitor-health
     status: monitor-status
+    selftest: monitor-selftest
   timezone: Asia/Dubai

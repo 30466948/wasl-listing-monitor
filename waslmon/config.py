@@ -68,7 +68,7 @@ class DomSettings(BaseModel):
 class ExtractSettings(BaseModel):
     counter_regex: str = r"(\d[\d,]*)\s*-\s*(\d[\d,]*)\s+of\s+(\d[\d,]*)\s+records?"
     no_results_markers: list[str] = Field(default_factory=lambda: [
-        "no results", "no properties", "no records", "nothing found", "not found"])
+        "no results", "no properties", "no records", "0 records found"])
     page_size: int = 12
     max_pages: int = 20
     pagination: PaginationSettings = Field(default_factory=PaginationSettings)
@@ -105,6 +105,7 @@ class LabelSettings(BaseModel):
     alert: str = "wasl-alert"
     health: str = "monitor-health"
     status: str = "monitor-status"
+    selftest: str = "monitor-selftest"
 
 
 class NotifySettings(BaseModel):
@@ -127,19 +128,20 @@ class Settings(BaseModel):
     notify: NotifySettings = Field(default_factory=NotifySettings)
 
     # -- URL helpers -------------------------------------------------------
-    def url_with_params(self, params: Mapping[str, str], page: Optional[int] = None) -> str:
+    def url_with_params(self, params: Mapping[str, str], page: Optional[int] = None,
+                        page_size: Optional[int] = None) -> str:
         q = dict(params)
         pg = self.extract.pagination
         if page is not None and page > 1 and pg.param:
             if pg.mode == "page":
                 q[pg.param] = str(pg.start + (page - 1))
             else:
-                q[pg.param] = str((page - 1) * self.extract.page_size)
+                q[pg.param] = str(pg.start + (page - 1) * (page_size or self.extract.page_size))
         base = self.source.host.rstrip("/") + self.source.search_path
         return f"{base}?{urlencode(q)}" if q else base
 
-    def search_url(self, page: Optional[int] = None) -> str:
-        return self.url_with_params(self.source.params, page)
+    def search_url(self, page: Optional[int] = None, page_size: Optional[int] = None) -> str:
+        return self.url_with_params(self.source.params, page, page_size)
 
     def control_url(self) -> str:
         return self.url_with_params(self.source.control_params)

@@ -99,11 +99,12 @@ def _update_fields(existing: ListingRecord, cur: ListingRecord, now: datetime) -
                  "rent_aed", "rent_raw", "size_sqft", "size_raw", "community", "location", "url",
                  "matched", "unclassified", "reject_reasons", "content_hash", "extractor", "fingerprint"):
         val = getattr(cur, name)
-        if val is not None and val != [] or name in ("matched", "unclassified"):
+        # classification outputs always move together; scraped fields keep last known value
+        if name in ("matched", "unclassified", "reject_reasons") or (val is not None and val != []):
             setattr(existing, name, val)
 
 
 def pending_alerts(ledger: Ledger) -> list[ListingRecord]:
     """Records discovered but not yet delivered (at-least-once delivery)."""
     return [r for r in ledger.listings.values()
-            if r.alerted_at is None and r.removed_at is None and r.keep and r.alert_kind is not None]
+            if r.alerted_at is None and r.keep and r.alert_kind is not None]

@@ -13,10 +13,18 @@ from urllib.parse import parse_qsl, urlsplit
 
 MAX_LINE = 500
 SENSITIVE_KEY = re.compile(
-    r"email|phone|mobile|(?<!building)(?<!community)(?<!location)(?<!unit)name|token|cookie|"
-    r"auth|password|secret|session|address|contact|passport|emirates|\beid\b|iban|card",
+    r"email|phone|mobile|(?<!building)(?<!community)(?<!location)(?<!unit)(?<!project)name|token|cookie|"
+    r"auth|password|secret|session|address|contact|passport|emirates|\beid\b|iban|"
+    r"creditcard|cardnumber|cardno|cardholder|"
+    r"agent|owner|landlord|broker|tenant|customer|client|person|\buser\b|\btel\b|telephone|"
+    r"whatsapp|\bmob\b|\bkey\b|api_?key|jwt|bearer|signature|credential|csrf|nonce",
     re.I,
 )
+
+
+def _norm_key(k: Any) -> str:
+    """Strip separators so snake_case / kebab-case keys hit the fixed-width lookbehinds."""
+    return re.sub(r"[\s_\-]+", "", str(k))
 
 
 def truncate(s: Any, n: int = MAX_LINE) -> str:
@@ -49,7 +57,7 @@ def redact_record(obj: Any, depth: int = 0, max_depth: int = 3, max_str: int = 8
     if isinstance(obj, dict):
         out: dict[str, Any] = {}
         for k, v in list(obj.items())[:60]:
-            if SENSITIVE_KEY.search(str(k)):
+            if SENSITIVE_KEY.search(_norm_key(k)):
                 out[k] = "<redacted>"
             else:
                 out[k] = redact_record(v, depth + 1, max_depth, max_str)

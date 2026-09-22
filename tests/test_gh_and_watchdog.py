@@ -41,14 +41,16 @@ def test_client_requires_env():
 def test_create_issue_assigns_owner_and_rolling():
     c = FakeClient()
     c.ensure_label("x")  # 422 tolerated
-    issue = c.create_issue("t", "b", ["l"])
+    issue = c.create_issue("title v1", "b", ["l"])
     assert issue["assignees"] == ["o"]
-    issue2, created = c.upsert_rolling_issue("monitor-health", "title", "body")
+    issue2, created = c.upsert_rolling_issue("monitor-health", "title v2", "body", title_prefix="title")
     assert not created and issue2["number"] == issue["number"]
     assert any(m == "POST" and p.endswith("/comments") for m, p, _ in c.calls)
     c.close_issue(issue["number"])
-    _, created = c.upsert_rolling_issue("monitor-health", "title", "body")
+    _, created = c.upsert_rolling_issue("monitor-health", "title v3", "body", title_prefix="title")
     assert created
+    _, created = c.upsert_rolling_issue("monitor-health", "other thread", "body", title_prefix="other")
+    assert created                                    # different prefix, same label -> separate issue
 
 
 def test_watchdog_paths(tmp_path, monkeypatch):

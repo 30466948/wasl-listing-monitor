@@ -36,6 +36,7 @@ def repo(tmp_path, settings, page_html, monkeypatch):
         return http["obj"]
 
     monkeypatch.setattr(runner, "HttpFetcher", factory)
+    settings.health.heartbeat.cadence = "off"          # wall-clock dependent; tested in test_health
     env = {"GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "7"}
     return tmp_path, settings, fake_gh, env, http
 
@@ -49,7 +50,8 @@ def test_baseline_then_quiet_then_forced(repo):
     rec = ledger["listings"]["IM00100279345"]
     assert rec["baseline"] and rec["alerted_at"] and rec["alerted_via"] == "github_issue"
     assert ledger["meta"]["baseline_sent_at"]
-    assert len(gh.open) == 1 and gh.open[0]["title"].startswith("[wasl] BASELINE ESTABLISHED - 1") and gh.open[0]["assignees"] == ["o"]
+    alerts = [i for i in gh.open if i["title"].startswith("[wasl] BASELINE") or i["title"].startswith("[wasl] NEW")]
+    assert len(alerts) == 1 and alerts[0]["title"].startswith("[wasl] BASELINE ESTABLISHED - 1") and alerts[0]["assignees"] == ["o"]
     health = json.loads((root / "state" / "health.json").read_text())
     assert health["armed_at"] and health["last_run_status"] == "ok" and health["run_history"][0]["matched"] == 1
     assert (root / "state" / "structure.json").exists()

@@ -34,7 +34,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10          # job default is 360; a hung run would burn 18% of the monthly quota
+    timeout-minutes: ${{ (inputs.mode == 'discovery' && 25) || 10 }}   # discovery probes ~25 requests; schedule keeps 10
     container:
       image: mcr.microsoft.com/playwright/python:v1.62.0-noble   # MUST equal playwright== in requirements.txt
       options: --ipc=host
@@ -62,7 +62,9 @@ jobs:
           ls "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}" || true
 
       - name: Install
-        run: python3 -m pip install --no-cache-dir -r requirements.txt
+        run: |
+          python3 -m pip --version >/dev/null 2>&1 || python3 -m ensurepip --upgrade
+          python3 -m pip install --no-cache-dir -r requirements.txt
 
       - name: Freeze
         if: env.WASLMON_MODE == 'discovery'

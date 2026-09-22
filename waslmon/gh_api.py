@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Optional
+from urllib.parse import quote, urlencode
 
 
 class GitHubAPIError(Exception):
@@ -45,6 +46,7 @@ class GitHubClient:
             "User-Agent": "wasl-listing-monitor",
             "Content-Type": "application/json",
         })
+        idempotent = method in ("GET", "HEAD", "PUT", "PATCH", "DELETE")
         for attempt in range(retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
@@ -52,12 +54,12 @@ class GitHubClient:
                     return json.loads(raw) if raw else None
             except urllib.error.HTTPError as e:
                 msg = e.read().decode("utf-8", "replace")[:300]
-                if e.code in (500, 502, 503, 504) and attempt < retries:
+                if e.code in (500, 502, 503, 504) and attempt < retries and idempotent:
                     time.sleep(2 * (attempt + 1))
                     continue
                 raise GitHubAPIError(e.code, msg) from None
             except urllib.error.URLError as e:
-                if attempt < retries:
+                if attempt < retries and idempotent:
                     time.sleep(2 * (attempt + 1))
                     continue
                 raise GitHubAPIError(0, str(e.reason)) from None
@@ -78,7 +80,8 @@ class GitHubClient:
         return self._request("POST", f"/repos/{self.repo}/issues", payload)
 
     def list_open_issues(self, label: str) -> list[dict]:
-        res = self._request("GET", f"/repos/{self.repo}/issues?state=open&labels={label}&per_page=20")
+        q = urlencode({"state": "open", "labels": label, "per_page": 100}, quote_via=quote)
+        res = self._request("GET", f"/repos/{self.repo}/issues?{q}")
         return [i for i in (res or []) if "pull_request" not in i]
 
     def comment(self, number: int, body: str) -> dict:
@@ -91,11 +94,16 @@ class GitHubClient:
     def get_repo(self) -> dict:
         return self._request("GET", f"/repos/{self.repo}")
 
-    def upsert_rolling_issue(self, label: str, title: str, body: str) -> tuple[dict, bool]:
-        """Comment on the open issue with this label, or create one. Returns (issue, created)."""
-        open_issues = self.list_open_issues(label)
-        if open_issues:
-            issue = open_issues[0]
-            self.comment(issue["number"], body)
-            return issue, False
+    def upsert_rolling_issue(self, label: str, title: str, body: str,
+                             title_prefix: Optional[str] = None) -> tuple[dict, bool]:
+        """Comment on the open issue with this label AND title prefix, or create one.
+
+        Matching on the prefix keeps the MONITOR BROKEN, WATCHDOG and heartbeat threads apart
+        even though they may share a label. Returns (issue, created).
+        """
+        prefix = title_prefix if title_prefix is not None else title
+        for issue in self.list_open_issues(label):
+            if str(issue.get("title", "")).startswith(prefix):
+                self.comment(issue["number"], body)
+                return issue, False
         return self.create_issue(title, body, [label]), True

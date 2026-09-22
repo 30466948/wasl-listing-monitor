@@ -20,7 +20,12 @@ from .normalize import (
     parse_building_name,
     parse_ref,
     parse_unit_no,
+    visible_text,
 )
+
+__all__ = ["parse_counter", "visible_text", "has_no_results_marker", "dig", "find_record_arrays",
+           "key_paths", "extract_api", "extract_dom", "reconcile", "structure_signature",
+           "selector_chain", "card_for"]
 
 UNIT_HREF_RE = re.compile(r"/unit/residential/(IM\d{11})", re.I)
 
@@ -37,13 +42,6 @@ def parse_counter(text: str, regex: str) -> Optional[tuple[int, int, int]]:
     except (ValueError, TypeError):
         return None
     return lo, hi, total
-
-
-def visible_text(html: str) -> str:
-    soup = BeautifulSoup(html or "", "html.parser")
-    for t in soup(["script", "style", "noscript"]):
-        t.decompose()
-    return soup.get_text(" ", strip=True)
 
 
 def has_no_results_marker(text: str, markers: Iterable[str]) -> bool:

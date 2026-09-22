@@ -4,7 +4,7 @@ name: watchdog
 # state/health.json and talks to the GitHub API with the standard library.
 on:
   schedule:
-    - cron: '11 5 * * *'      # daily 05:11 UTC = 09:11 Asia/Dubai
+    - cron: '11 */4 * * *'    # every 4 h at :11 UTC (off-peak minute), matching the 4 h staleness threshold
   workflow_dispatch:
     inputs:
       stale_hours:

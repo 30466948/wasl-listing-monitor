@@ -12,16 +12,27 @@ import hashlib
 import re
 from typing import Optional
 
+from bs4 import BeautifulSoup
+
 REF_RE = re.compile(r"IM\d{11}")
 BUILDING_CODE_RE = re.compile(r"\bR\d{2,5}-[A-Za-z0-9]{1,8}\b")
 _NUM = r"\d[\d,]*(?:\.\d+)?"
-AED_RE = re.compile(rf"AED\s*({_NUM})(?:\s*(?:-|to)\s*({_NUM}))?", re.I)
+_PRICE = r"\d{1,3}(?:,\d{3})+|\d{4,}"   # price-shaped: 47,000 or 47000, never a bare "2"
+AED_RE = re.compile(rf"AED\s*({_NUM})(?:\s*(?:-|to)\s*({_PRICE}))?", re.I)
 SQFT_RE = re.compile(rf"({_NUM})(?:\s*-\s*({_NUM}))?\s*sq\.?\s*\.?\s*ft", re.I)
 BED_RE = re.compile(r"(\d+)\s*(?:\+\s*[A-Za-z]+\s*)?(?:-\s*)?bed", re.I)
 BED_LABEL_RE = re.compile(r"(Studio|\d+\s*(?:\+\s*[A-Za-z]+\s*)?-?\s*Bed(?:room)?s?(?:\s*\([^)]{0,30}\)|\s+(?:Large|Small|Extra\s+Large|\+\s*\w+))?)", re.I)
 UNIT_RE = re.compile(r"\bunit\s*(?:no\.?|#|number)?\s*:?\s*#?\s*([A-Za-z0-9-]{1,10})\b", re.I)
 BUILDING_RE = re.compile(r"((?:wasl\s+)?[A-Za-z][A-Za-z ]{1,30}?\s*-\s*Building\s+[A-Za-z0-9]{1,4}|Building\s+[A-Za-z0-9]{1,4})", re.I)
 _WS = re.compile(r"\s+")
+
+
+def visible_text(html: str) -> str:
+    """Text a visitor would see: scripts, styles and markup removed."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    for t in soup(["script", "style", "noscript", "template"]):
+        t.decompose()
+    return soup.get_text(" ", strip=True)
 
 
 def norm_text(s: Optional[str]) -> Optional[str]:
@@ -65,19 +76,20 @@ def parse_bedrooms(raw: Optional[str]) -> Optional[int]:
 
 
 def parse_aed(raw: Optional[str]) -> Optional[int]:
-    """'AED 47,000' -> 47000; 'AED 45,000 - 50,000' -> 45000 (minimum of a range)."""
+    """'AED 47,000' -> 47000; 'AED 45,000 - 50,000' -> 45000 (low end of a range).
+
+    The first AED-prefixed number is authoritative; a trailing unrelated number
+    ('AED 47,000 Yearly Deposit AED 5,000', 'AED 47,000 2 Bedroom') never wins.
+    """
     if raw is None:
         return None
     s = str(raw)
     m = AED_RE.search(s)
     if m:
-        nums = [_to_number(g) for g in m.groups() if g]
-    else:
-        nums = [_to_number(x) for x in re.findall(_NUM, s)]
-    nums = [n for n in nums if n is not None and n > 0]
-    if not nums:
-        return None
-    return int(round(min(nums)))
+        lo = _to_number(m.group(1))
+        return int(round(lo)) if lo and lo > 0 else None
+    nums = [n for n in (_to_number(x) for x in re.findall(_NUM, s)) if n and n > 0]
+    return int(round(nums[0])) if nums else None
 
 
 def parse_sqft(raw: Optional[str]) -> Optional[float]:
@@ -102,17 +114,19 @@ def parse_building_code(text: Optional[str]) -> Optional[str]:
     return m.group(0) if m else None
 
 
+_UNIT_LABELS = {"type", "no", "number", "details", "features", "size", "price", "ref", "reference"}
+
+
 def parse_unit_no(text: Optional[str]) -> Optional[str]:
+    """First 'Unit <n>' whose value contains a digit; label words ('Unit Type') are skipped."""
     if not text:
         return None
-    m = UNIT_RE.search(text)
-    if not m:
-        return None
-    val = m.group(1)
-    # 'Unit Type' style false positives
-    if val.lower() in {"type", "no", "number"}:
-        return None
-    return val
+    for m in UNIT_RE.finditer(text):
+        val = m.group(1)
+        if val.lower() in _UNIT_LABELS or not any(c.isdigit() for c in val):
+            continue
+        return val
+    return None
 
 
 def parse_bedrooms_label(text: Optional[str]) -> Optional[str]:
@@ -138,7 +152,9 @@ def fingerprint(ref: str, building_code: Optional[str], building: Optional[str],
         (unit_type or "").casefold(),
         str(int(size_sqft)) if size_sqft else "",
     ]
-    if not any(parts[:2]):
+    # a fingerprint needs a building AND a unit-level discriminator, or it would collapse to
+    # building level and make every unit in the building look like the same flat
+    if not parts[0] or not (parts[1] or parts[2]):
         return f"ref:{ref}"
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 

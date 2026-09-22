@@ -19,7 +19,7 @@
   edge is blocking the runner. Re-run once; if it persists the runner IP range is blocked.
   Options: hosted monitor service, or run from a machine in the UAE.
 - `control_query_failed:total=...` - the site answers but not with real results.
-- `counter_missing_and_no_listings` / `completeness_mismatch` / `pagination_param_unknown` -
+- `counter_missing` / `counter_missing_and_no_listings` / `completeness_mismatch` / `pagination_param_unknown` -
   the page structure changed. Run `discovery`, read the log, update `config.yaml`
   (`extract.*`), run `dry-run`, then `monitor`.
 - `parse_ratio_low` - fields still there but formatted differently; update `normalize.py`.

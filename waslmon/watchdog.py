@@ -66,7 +66,7 @@ def main() -> int:
                 f"Check {actions_url} and trigger the monitor manually (workflow_dispatch). "
                 f"Until it succeeds, silence does not mean no new listings.")
         try:
-            issue, created = client.upsert_rolling_issue(label, title, body)
+            issue, created = client.upsert_rolling_issue(label, title, body, title_prefix=WATCHDOG_PREFIX)
         except GitHubAPIError as e:
             _annot("error", f"watchdog could not open issue: {e}")
             return 1

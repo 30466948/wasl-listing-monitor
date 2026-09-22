@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import math
-import os
 import time
 import traceback
 from collections.abc import Callable, Mapping
@@ -103,16 +102,13 @@ def _assert_page(r: FetchResult, settings: Settings, what: str) -> None:
                                                         detail=f"{what} {reason} url={safe_url(r.final_url)}")])
 
 
-def _page_text(r: FetchResult) -> str:
-    return visible_text(r.text)
-
-
 def collect(settings: Settings, fetch_page: Callable[[str], FetchResult], path: str) -> Collected:
+    """Walk every result page; the counter is mandatory unless the page says explicitly 'no results'."""
     ex = settings.extract
     issues: list[DataIssue] = []
     first = fetch_page(settings.search_url(1))
     _assert_page(first, settings, "search_p1")
-    text = _page_text(first)
+    text = visible_text(first.text)
     counter = parse_counter(text, ex.counter_regex)
     no_results = has_no_results_marker(text, ex.no_results_markers)
     api_sample = None
@@ -136,26 +132,22 @@ def collect(settings: Settings, fetch_page: Callable[[str], FetchResult], path: 
         if no_results and not raws:
             log.info("search_p1: explicit no-results marker present, zero listings")
             return Collected(raws=[], total=0, pages=1, path=path, first_html=first.text, issues=issues)
-        if not raws:
-            raise Degraded("counter_missing_and_no_listings",
-                           [DataIssue(kind="completeness", detail="no results counter and no unit anchors found")])
-        log.warning("results counter not found; completeness cannot be asserted on this run")
-        total: Optional[int] = None
-        pages = 1
-    else:
-        lo, hi, total = counter
-        derived = max(1, hi - lo + 1)
-        page_size = derived if derived >= 1 else ex.page_size
-        pages = max(1, math.ceil(total / page_size)) if total else 1
-        if pages > ex.max_pages:
-            raise Degraded(f"too_many_pages:{pages}>{ex.max_pages}")
-        if pages > 1 and not ex.pagination.param and not ex.api.single_page:
-            raise Degraded(f"pagination_param_unknown:{total}_records_over_{pages}_pages",
-                           [DataIssue(kind="completeness", detail="set extract.pagination.param after discovery")])
+        raise Degraded("counter_missing" if raws else "counter_missing_and_no_listings",
+                       [DataIssue(kind="completeness",
+                                  detail="results counter not parsed; completeness cannot be asserted "
+                                         f"({len(raws)} listing anchors seen)")])
+
+    lo, hi, total = counter
+    page_size = max(1, hi - lo + 1)
+    pages = max(1, math.ceil(total / page_size)) if total else 1
+    if pages > ex.max_pages:
+        raise Degraded(f"too_many_pages:{pages}>{ex.max_pages}")
+    if pages > 1 and not ex.pagination.param and not ex.api.single_page:
+        raise Degraded(f"pagination_param_unknown:{total}_records_over_{pages}_pages",
+                       [DataIssue(kind="completeness", detail="set extract.pagination.param after discovery")])
+    if not ex.api.single_page:
         for p in range(2, pages + 1):
-            if ex.api.single_page:
-                break
-            r = fetch_page(settings.search_url(p))
+            r = fetch_page(settings.search_url(p, page_size))
             _assert_page(r, settings, f"search_p{p}")
             raws.extend(extract_one(r))
 
@@ -164,7 +156,7 @@ def collect(settings: Settings, fetch_page: Callable[[str], FetchResult], path: 
         if raw.ref and raw.ref not in seen:
             seen[raw.ref] = raw
     uniq = list(seen.values())
-    if total is not None and len(uniq) != total:
+    if len(uniq) != total:
         raise Degraded(f"completeness_mismatch:{len(uniq)}_refs_vs_{total}_records",
                        [DataIssue(kind="completeness", detail=f"collected {len(uniq)} unique refs, site says {total}")])
     return Collected(raws=uniq, total=total, pages=pages, path=path, first_html=first.text, issues=issues,
@@ -174,7 +166,7 @@ def collect(settings: Settings, fetch_page: Callable[[str], FetchResult], path: 
 def control_check(settings: Settings, fetch_page: Callable[[str], FetchResult]) -> int:
     r = fetch_page(settings.control_url())
     _assert_page(r, settings, "control")
-    counter = parse_counter(_page_text(r), settings.extract.counter_regex)
+    counter = parse_counter(visible_text(r.text), settings.extract.counter_regex)
     total = counter[2] if counter else r.ref_count
     if total < settings.source.control_min_total:
         raise Degraded(f"control_query_failed:total={total}<{settings.source.control_min_total}",
@@ -189,7 +181,6 @@ def gather(settings: Settings) -> Collected:
     limiter = RateLimiter(src.min_seconds_between_requests, src.max_requests_per_run)
     http = HttpFetcher(settings, limiter)
     strategy = settings.fetch.strategy
-    use_browser = strategy == "browser"
     if strategy in ("auto", "requests"):
         probe = http.get(settings.search_url(1))
         reason = detect_challenge(probe, settings.extract.counter_regex, settings.extract.no_results_markers)
@@ -201,17 +192,14 @@ def gather(settings: Settings) -> Collected:
         if strategy == "requests":
             raise Degraded(f"http:{reason}", [DataIssue(kind="fetch_error", detail=reason)])
         log.warning(f"http path unusable ({reason}); falling back to headless browser")
-        use_browser = True
-    if use_browser:
-        b = settings.fetch.browser
-        with BrowserFetcher(settings, limiter) as bf:
-            def fp(u: str) -> FetchResult:
-                return bf.get(u, b.wait_selector, settings.extract.counter_regex,
-                              settings.extract.no_results_markers, b.wait_timeout_s)
-            col = collect(settings, fp, "browser")
-            col.control_total = control_check(settings, fp)
-            return col
-    raise Degraded("no_fetch_path")  # pragma: no cover
+    b = settings.fetch.browser
+    with BrowserFetcher(settings, limiter) as bf:
+        def fp(u: str) -> FetchResult:
+            return bf.get(u, b.wait_selector, settings.extract.counter_regex,
+                          settings.extract.no_results_markers, b.wait_timeout_s)
+        col = collect(settings, fp, "browser")
+        col.control_total = control_check(settings, fp)
+        return col
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +237,39 @@ def heartbeat_body(ledger: Ledger, health, settings: Settings, info: RunInfo, no
     return "\n".join(lines)
 
 
+def _deliver_pending(ledger: Ledger, notifier: Notifier, settings: Settings, now: datetime,
+                     issues: list[DataIssue], sent: list[str]) -> bool:
+    """Send every pending alert in capped batches; stamp only records whose issue exists. Returns ok."""
+    ok = True
+    pend = pending_alerts(ledger)
+    for kind in ("baseline", "anomaly", "new", "relisted"):
+        recs = [r for r in pend if r.alert_kind == kind]
+        if not recs:
+            continue
+        if kind == "baseline" and not settings.notify.baseline:
+            for r in recs:
+                r.alerted_at, r.alerted_via = now, "silent"
+            continue
+        cap = settings.notify.baseline_max_listings if kind in ("baseline", "anomaly") else settings.notify.max_listings_per_issue
+        order = sorted(recs, key=lambda r: (r.rent_aed is None, r.rent_aed or 0))
+        try:
+            for i in range(0, len(order), cap):
+                batch = order[i:i + cap]
+                url = notifier.send_listings(kind, batch)
+                if not url:
+                    raise GitHubAPIError(0, "issue creation returned no URL")
+                for r in batch:
+                    r.alerted_at, r.alerted_via = now, "github_issue"
+                sent.append(f"{kind}:{len(batch)} -> {url}")
+            if kind == "baseline":
+                ledger.meta.baseline_sent_at = now
+        except GitHubAPIError as e:
+            ok = False
+            issues.append(DataIssue(kind="notify_error", detail=f"{kind} alert failed: {e}"))
+            log.error(f"notification failed for {kind}: {e}")
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
@@ -262,9 +283,9 @@ def run(settings: Settings, mode: str, root: Path, env: Mapping[str, str]) -> in
         try:
             client = GitHubClient.from_env()
         except GitHubAPIError as e:
-            log.error(f"GitHub client unavailable: {e}")
-            if mode == "selftest":
-                return 3
+            # Fail loud before any state is touched: without a channel, nothing may be marked delivered.
+            log.error(f"GitHub client unavailable, refusing to run: {e}")
+            return 3
     notifier = Notifier(settings, client, info, dry_run=dry_run)
 
     if mode == "selftest":
@@ -334,33 +355,17 @@ def run(settings: Settings, mode: str, root: Path, env: Mapping[str, str]) -> in
 
         save_ledger(paths.seen, ledger)                        # phase 1: discovery is durable
         atomic_write_json(paths.structure, structure_signature(col.first_html, col.api_sample))
-
-        pend = pending_alerts(ledger)
-        notify_failed = False
-        for kind in ("baseline", "anomaly", "new", "relisted"):
-            recs = [r for r in pend if r.alert_kind == kind]
-            if not recs:
-                continue
-            if kind == "baseline" and not settings.notify.baseline:
-                for r in recs:
-                    r.alerted_at, r.alerted_via = now, "silent"
-                continue
-            try:
-                url = notifier.send_listings(kind, recs)
-                for r in recs:
-                    r.alerted_at, r.alerted_via = now, "github_issue"
-                sent.append(f"{kind}:{len(recs)} -> {url}")
-                if kind == "baseline":
-                    ledger.meta.baseline_sent_at = now
-            except GitHubAPIError as e:
-                notify_failed = True
-                issues.append(DataIssue(kind="notify_error", detail=f"{kind} alert failed: {e}"))
-                log.error(f"notification failed for {kind}: {e}")
-        archived = compact(ledger, now, paths.state_dir, settings.diff.archive_after_days)
-        if archived:
-            log.info(f"archived {archived} old removed records")
-        save_ledger(paths.seen, ledger)                        # phase 2: delivery stamped
-        if notify_failed:
+        delivered_ok = _deliver_pending(ledger, notifier, settings, now, issues, sent)
+        save_ledger(paths.seen, ledger)                        # phase 2: delivery stamps are durable
+        try:
+            archived = compact(ledger, now, paths.state_dir, settings.diff.archive_after_days)
+            if archived:
+                log.info(f"archived {archived} old removed records")
+                save_ledger(paths.seen, ledger)                # phase 3: housekeeping, best effort
+        except Exception as e:  # noqa: BLE001 - housekeeping must never cost a delivery stamp
+            issues.append(DataIssue(kind="ledger", detail=f"compaction failed: {type(e).__name__}"))
+            log.warning(f"compaction failed: {type(e).__name__}: {str(e)[:120]}")
+        if not delivered_ok:
             status, reason = "degraded", "notify_error"
     except Degraded as d:
         status, reason = "degraded", d.reason
@@ -379,6 +384,10 @@ def run(settings: Settings, mode: str, root: Path, env: Mapping[str, str]) -> in
         log.error(reason)
         for line in traceback.format_exc().splitlines()[-12:]:
             log.info(line)
+    except BaseException as e:  # cancellation / SIGINT must never be recorded as success
+        status, reason = "failed", f"interrupted:{type(e).__name__}"
+        log.error(f"INTERRUPTED: {reason}")
+        raise
     finally:
         duration = time.monotonic() - t0
         if not dry_run:
@@ -390,7 +399,10 @@ def run(settings: Settings, mode: str, root: Path, env: Mapping[str, str]) -> in
                 record_success(health, now, entry)
             else:
                 record_failure(health, now, reason or status, entry)
-            _health_notifications(settings, notifier, health, ledger, info, now, status, reason, issues)
+            try:
+                _health_notifications(settings, notifier, health, ledger, info, now, status, reason, issues)
+            except Exception as e:  # noqa: BLE001 - health must be persisted even if notifying fails
+                log.error(f"health notification crashed: {type(e).__name__}: {str(e)[:120]}")
             save_health(paths.health, health)
         _summary(mode, status, reason, info, bd, diff, issues, sent, duration, col)
     return {"ok": 0, "degraded": 2}.get(status, 1)
@@ -424,8 +436,8 @@ def _health_notifications(settings, notifier: Notifier, health, ledger, info, no
 
 def _summary(mode, status, reason, info: RunInfo, bd: Breakdown, diff, issues, sent, duration, col) -> None:
     lines = [f"mode={mode} status={status.upper()}" + (f" reason={reason}" if reason else ""),
-             f"fetch_path={info.fetch_path or '-'} site_total={info.total_records} pages={col.pages if col else '-'} "
-             f"control_total={col.control_total if col else '-'}",
+             (f"fetch_path={info.fetch_path or '-'} site_total={info.total_records} pages={col.pages if col else '-'} "
+              f"control_total={col.control_total if col else '-'}"),
              bd.summary(),
              (f"events: new={len(diff.new)} relisted={len(diff.relisted)} price_changes={len(diff.price_changes)} "
               f"absent={len(diff.absent)} removed={len(diff.removed)} anomaly={diff.anomaly} baseline={diff.baseline}")
@@ -437,4 +449,3 @@ def _summary(mode, status, reason, info: RunInfo, bd: Breakdown, diff, issues, s
         for line in lines:
             log.info(line)
     log.step_summary("### wasl monitor run\n\n```\n" + "\n".join(lines) + "\n```")
-    _ = os  # keep os imported for callers that patch environ

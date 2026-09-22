@@ -15,13 +15,17 @@ import requests
 
 from . import log
 from .config import Settings
-from .normalize import REF_RE, norm_text
+from .normalize import REF_RE, norm_text, visible_text
 from .redact import safe_url
 from .retry import retry
 
 
 class TransientHTTPError(Exception):
     pass
+
+
+class BrowserError(RuntimeError):
+    """Any headless-browser failure. RuntimeError so callers degrade instead of crashing."""
 
 
 class RequestBudgetExceeded(Exception):
@@ -149,15 +153,19 @@ class BrowserFetcher:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as e:  # pragma: no cover
-            raise RuntimeError("playwright is not installed in this environment") from e
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=True)
-        self._ctx = self._browser.new_context(
-            user_agent=self.settings.source.user_agent, locale="en-GB",
-            viewport={"width": 1366, "height": 900},
-            extra_http_headers={"Accept-Language": "en-GB,en;q=0.9"},
-        )
-        self._page = self._ctx.new_page()
+            raise BrowserError("playwright is not installed in this environment") from e
+        try:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._ctx = self._browser.new_context(
+                user_agent=self.settings.source.user_agent, locale="en-GB",
+                viewport={"width": 1366, "height": 900},
+                extra_http_headers={"Accept-Language": "en-GB,en;q=0.9"},
+            )
+            self._page = self._ctx.new_page()
+        except Exception as e:  # __exit__ does not run when __enter__ raises: clean up here
+            self.__exit__(None, None, None)
+            raise BrowserError(f"browser launch failed: {type(e).__name__}: {str(e)[:160]}") from e
         return self
 
     def __exit__(self, *exc) -> None:
@@ -210,37 +218,43 @@ class BrowserFetcher:
         page.on("response", on_response)
         self.limiter.wait()
         t0 = time.monotonic()
-        resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_s * 1000)
-        status = resp.status if resp else 0
         try:
-            if wait_selector:
-                page.wait_for_selector(wait_selector, timeout=timeout_s * 1000)
-            elif counter_regex:
-                rx = re.compile(counter_regex, re.I)
-                markers = [m.lower() for m in (no_results_markers or [])]
-                deadline = time.monotonic() + timeout_s
-                while time.monotonic() < deadline:
-                    html = page.content()
-                    low = html.lower()
-                    if rx.search(html) or REF_RE.search(html) or any(m in low for m in markers):
-                        break
-                    page.wait_for_timeout(500)
-            else:
-                page.wait_for_load_state("networkidle", timeout=timeout_s * 1000)
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_s * 1000)
+            status = resp.status if resp else 0
+            try:
+                if wait_selector:
+                    page.wait_for_selector(wait_selector, timeout=timeout_s * 1000)
+                elif counter_regex:
+                    rx = re.compile(counter_regex, re.I)
+                    markers = [m.lower() for m in (no_results_markers or [])]
+                    deadline = time.monotonic() + timeout_s
+                    while time.monotonic() < deadline:
+                        html = page.content()
+                        if rx.search(html) or REF_RE.search(html) or (
+                                markers and any(m in visible_text(html).lower() for m in markers)):
+                            break
+                        page.wait_for_timeout(500)
+                else:
+                    page.wait_for_load_state("networkidle", timeout=timeout_s * 1000)
+            except Exception as e:
+                log.warning(f"browser wait ended early: {type(e).__name__}")
+            page.wait_for_timeout(750)
+            text = page.content()
+            header_names = sorted({k.lower() for k in (resp.headers if resp else {}).keys()})
+            cookie_names = sorted({c.get("name", "").lower() for c in self._ctx.cookies()})
+            return FetchResult(url=url, status=status, text=text, final_url=page.url,
+                               content_type=(resp.headers.get("content-type", "") if resp else ""),
+                               header_names=header_names, cookie_names=cookie_names,
+                               elapsed_s=time.monotonic() - t0, path="browser", captured=captured)
+        except BrowserError:
+            raise
         except Exception as e:
-            log.warning(f"browser wait ended early: {type(e).__name__}")
-        page.wait_for_timeout(750)
-        text = page.content()
-        try:
-            page.remove_listener("response", on_response)
-        except Exception:
-            pass
-        header_names = sorted({k.lower() for k in (resp.headers if resp else {}).keys()})
-        cookie_names = sorted({c.get("name", "").lower() for c in self._ctx.cookies()})
-        return FetchResult(url=url, status=status, text=text, final_url=page.url,
-                           content_type=(resp.headers.get("content-type", "") if resp else ""),
-                           header_names=header_names, cookie_names=cookie_names,
-                           elapsed_s=time.monotonic() - t0, path="browser", captured=captured)
+            raise BrowserError(f"browser fetch failed: {type(e).__name__}: {str(e)[:160]}") from e
+        finally:
+            try:
+                page.remove_listener("response", on_response)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +289,8 @@ def looks_like_results_page(text: str, counter_regex: str, no_results_markers: l
         return True
     if REF_RE.search(text):
         return True
-    low = text.lower()
-    return any(m in low for m in no_results_markers)
+    low = visible_text(text).lower()          # markers are matched on visible text, never on scripts
+    return any(m.lower() in low for m in no_results_markers)
 
 
 def detect_challenge(r: FetchResult, counter_regex: str, no_results_markers: list[str]) -> Optional[str]:

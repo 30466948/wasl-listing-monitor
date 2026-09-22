@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 from . import log
 from .config import Settings
 from .extract import (
+    _first,
     card_for,
     extract_dom,
     find_record_arrays,
@@ -176,6 +177,7 @@ def dom_report(html: str, settings: Settings) -> None:
         log.info(f"anchor chain: {selector_chain(a, 6)}")
         card = card_for(a)
         log.info(f"card chain:   {selector_chain(card, 3)} text={truncate(redact_text(card.get_text(' ', strip=True)), 300)!r}")
+    # Structure only: never print card markup (it can carry agent names / phone numbers).
     seen_cards = set()
     shown = 0
     for a in anchors:
@@ -184,8 +186,21 @@ def dom_report(html: str, settings: Settings) -> None:
         if key in seen_cards:
             continue
         seen_cards.add(key)
-        log.info(f"--- card {shown + 1} outerHTML (truncated 2000, redacted) ---")
-        _lines(redact_text(str(card))[:2000], 480)
+        log.info(f"--- card {shown + 1} structure (tag/class/attr names only) ---")
+        log.info(f"  chain={selector_chain(card, 3)} tag={card.name} attr_names={sorted(card.attrs)[:20]}")
+        for el in card.find_all(True)[:40]:
+            href = urlsplit(el.get("href") or "").path if el.name == "a" else ""
+            txt = el.get_text(" ", strip=True)
+            low = txt.lower()
+            kind = ("aed" if "aed" in low else "sqft" if "sq" in low and "ft" in low
+                    else "bed" if "bed" in low or "studio" in low else "unit" if "unit" in low
+                    else "building" if "building" in low else "")
+            log.info(f"    {el.name} class={(el.get('class') or [])[:4]} attrs={sorted(el.attrs)[:10]}"
+                     + (f" href_path={href}" if href else "") + (f" looks_like={kind}" if kind else "")
+                     + f" text_len={len(txt)}")
+        probes = {k: _first(card, v) for k, v in settings.extract.dom.fields.items() if v}
+        if probes:
+            log.info("  field probes: " + truncate(json.dumps(redact_record(probes), ensure_ascii=False), 400))
         shown += 1
         if shown >= 2:
             break
@@ -313,13 +328,13 @@ def run(settings: Settings, root: Path) -> int:
                 c = parse_counter(visible_text(rb.text), settings.extract.counter_regex)
                 total = c[2] if c else total
                 fetch = lambda u: bf.get(u, b.wait_selector, settings.extract.counter_regex,  # noqa: E731
-                                         settings.extract.no_results_markers, b.wait_timeout_s)
+                                         settings.extract.no_results_markers, min(8, b.wait_timeout_s))
             with log.group("PAGINATION_PROBE"):
                 pagination_probe(fetch, settings, base_refs, total)
             with log.group("COVERAGE_PROBE"):
                 coverage_probe(fetch, settings, base_refs)
-    except RuntimeError as e:
-        log.warning(f"browser unavailable ({e}); probes continue on the http path only")
+    except Exception as e:  # noqa: BLE001 - the browser path is optional in discovery
+        log.warning(f"browser path unavailable ({type(e).__name__}: {str(e)[:200]}); probes continue on the http path only")
         if http_ok:
             with log.group("PAGINATION_PROBE"):
                 pagination_probe(fetch, settings, base_refs, total)
