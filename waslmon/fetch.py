@@ -316,7 +316,7 @@ CHALLENGE_TITLE = re.compile(
     r"error 4\d\d|error 5\d\d|maintenance", re.I)
 CHALLENGE_BODY = re.compile(
     r"_Incapsula_Resource|cf-chl|cf_chl_opt|challenge-platform|Request unsuccessful\. Incapsula|"
-    r"validate\.perfdrive\.com|Radware Captcha|ShieldSquare|"
+    r"Radware Captcha Page|"
     r"Please enable JavaScript and cookies to continue|Access Denied.{0,80}permission to access|"
     r"The requested URL was rejected", re.I | re.S)
 WAF_HEADER_NAMES = {"cf-ray", "cf-cache-status", "x-iinfo", "x-cdn", "x-amzn-waf-action", "x-amz-cf-id",

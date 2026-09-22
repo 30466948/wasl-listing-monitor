@@ -21,3 +21,19 @@ Decisions:
 3. Card selector `section.all-units-cards`; heading `h3` gives building code and community;
    rent, size, bedrooms and unit number are parsed from the labelled `h4` texts.
 4. Off-site redirect (`final_url` host differs) is a challenge signal in its own right.
+
+## Discovery run 2 (2026-09-22 04:33 UTC, commit 4cd4318)
+
+| Probe | Result |
+|---|---|
+| Browser, first navigation | 200, 221 KB, Drupal headers, waited 39.6 s: **no results counter ever appeared**. The page shows the same 10 default units as run 1 (Al Barsha, Al Hudaiba, Naif, Al Sabkha, Al Murqqabat, Al Garhoud) with the community/room/usage filters ignored. No listing API call was made by the page; the only wasl XHRs were the bot-manager fingerprint POST and `/en/search/suggestions` (autocomplete). |
+| Browser, every later navigation | Redirected to `validate.perfdrive.com` ("Radware Captcha Page"): pagination and building probes all blocked. |
+| Parsers | Correct on all 10 real cards: rent `Price <glyph> 101,999 / Year` -> 101999, `Type: 2 room flat` -> 2, `Size (Sq.ft.) 1,355.00` -> 1355, heading `R441 - al barsha` -> code R441 / community al barsha, location, unit no. Each card appears twice in the DOM (grid + list view); extraction now de-duplicates by ref. |
+| Autocomplete data | `/en/search/suggestions` returns 350 slugs grouped LOCATIONS / communities / buildings; useful to verify `wasl-village` exists, not for listings. |
+
+Conclusion (Gate 1): wasl.ae is protected by Radware Bot Manager, which classifies the GitHub-hosted
+runner (Azure datacenter IP + headless Chromium) as a bot after its JavaScript fingerprint runs.
+The generic first page is consistent with a "serve alternate content" bot response. Because the
+monitor requires the results counter before it trusts a page, such runs are reported as DEGRADED
+(`counter_missing`), never as "no new listings". A different vantage point (residential network
+and a real browser) is needed; see README "Deployment options".

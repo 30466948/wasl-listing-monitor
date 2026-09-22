@@ -192,9 +192,11 @@ def extract_dom(html: str, settings: Settings) -> list[RawListing]:
     dom = settings.extract.dom
     cards: list[tuple[Tag, str]] = []
     if dom.card_selector:
+        seen_sel: set[str] = set()
         for c in soup.select(dom.card_selector):
             m = UNIT_HREF_RE.search(str(c))
-            if m:
+            if m and m.group(1).upper() not in seen_sel:   # grid and list views repeat each card
+                seen_sel.add(m.group(1).upper())
                 cards.append((c, m.group(1).upper()))
     else:
         seen: set[str] = set()
