@@ -45,8 +45,10 @@ from .normalize import REF_RE
 from .redact import param_names, redact_record, redact_text, safe_url, truncate
 
 BUILDING_SLUGS = [5, 10, 13, 19, 34, 35, 38, 39, 57, 62]
-PAGINATION_CANDIDATES = [("page", "2"), ("p", "2"), ("pageNumber", "2"), ("PageNumber", "2"), ("page_no", "2"),
-                         ("pageIndex", "1"), ("offset", "12"), ("start", "12"), ("skip", "12")]
+# Drupal Views pagers are 0-indexed: ?page=1 is the SECOND page. Try that first.
+PAGINATION_CANDIDATES = [("page", "1"), ("page", "2"), ("p", "2"), ("pageNumber", "2"), ("page_no", "2"),
+                         ("offset", "12"), ("start", "12")]
+COUNT_WORDS_RE = re.compile(r"(\d[\d,]*)\s*(results?|records?|properties|units|listings|found)", re.I)
 
 
 def _lines(text: str, width: int = 480) -> None:
@@ -122,7 +124,7 @@ def probe_http(http: HttpFetcher, url: str, settings: Settings, label: str) -> O
 
 
 def describe(r: FetchResult, settings: Settings, label: str) -> None:
-    text = visible_text(r.text)
+    text = r.page_text()
     counter = parse_counter(text, settings.extract.counter_regex)
     reason = detect_challenge(r, settings.extract.counter_regex, settings.extract.no_results_markers)
     log.info(f"{label}: status={r.status} final={safe_url(r.final_url)} ct={r.content_type[:40]} bytes={len(r.text)} "
@@ -138,9 +140,18 @@ def describe(r: FetchResult, settings: Settings, label: str) -> None:
     if m:
         s = max(0, m.start() - 80)
         log.info(f"{label}: counter context: ...{redact_text(text[s:m.end() + 80])}...")
+    else:
+        hits = [redact_text(text[max(0, x.start() - 40):x.end() + 40]) for x in COUNT_WORDS_RE.finditer(text)]
+        log.info(f"{label}: count-like phrases in visible text: {hits[:8]}")
+    log.info(f"{label}: visible_text_len={len(text)} first_300={redact_text(text[:300])!r}")
 
 
 def network_report(r: FetchResult) -> None:
+    log.info(f"requests seen (xhr/fetch/document): {len(r.requests_seen)}")
+    for q in r.requests_seen[:60]:
+        parts = urlsplit(q.url)
+        log.info(f"  REQ {q.method} {q.resource_type} {parts.netloc}{parts.path} params={param_names(q.url)}"
+                 + (f" post_params={q.post_param_names}" if q.post_param_names else ""))
     log.info(f"captured xhr/fetch responses: {len(r.captured)}")
     for c in r.captured[:40]:
         parts = urlsplit(c.url)
@@ -158,9 +169,9 @@ def network_report(r: FetchResult) -> None:
             _lines("   sample=" + json.dumps(sample, ensure_ascii=False, default=str), 480)
 
 
-def dom_report(html: str, settings: Settings) -> None:
+def dom_report(html: str, settings: Settings, body_text: Optional[str] = None) -> None:
     soup = BeautifulSoup(html or "", "html.parser")
-    text = visible_text(html)
+    text = body_text if body_text is not None else visible_text(html)
     log.info(f"title={soup.title.get_text(strip=True)[:120] if soup.title else ''!r} bytes={len(html or '')}")
     m = re.search(settings.extract.counter_regex, text, re.I)
     log.info(f"counter_text={m.group(0) if m else None}")
@@ -205,7 +216,19 @@ def dom_report(html: str, settings: Settings) -> None:
         if shown >= 2:
             break
     low = text.lower()
-    log.info(f"no_results markers present: {[m for m in settings.extract.no_results_markers if m in low]}")
+    log.info(f"no_results markers present in VISIBLE text: {[m for m in settings.extract.no_results_markers if m in low]}")
+    for m in settings.extract.no_results_markers:
+        i = low.find(m)
+        if i >= 0:
+            log.info(f"  marker context: ...{redact_text(text[max(0, i - 80):i + 80])}...")
+    # card texts as a visitor sees them (parser fixture material; listing data only)
+    cards = soup.select(settings.extract.dom.card_selector or "section.all-units-cards") or [card_for(a) for a in anchors[:5]]
+    for i, c in enumerate(cards[:6]):
+        log.info(f"card_text[{i}]: {truncate(redact_text(c.get_text(' | ', strip=True)), 400)!r}")
+    pager = soup.select('a[href*="page="], .pager a, nav[aria-label*="agination"] a, .pagination a')
+    log.info(f"pager links: {len(pager)} first={[urlsplit(a.get('href') or '').query[:40] for a in pager[:8]]}")
+    pager_text = [redact_text(el.get_text(' ', strip=True))[:120] for el in soup.select('.pager, .pagination, nav[aria-label*="agination"]')]
+    log.info(f"pager text: {pager_text[:3]}")
     cands = []
     rx = re.compile(settings.extract.counter_regex, re.I)
     for el in soup.find_all(string=rx):
@@ -234,12 +257,14 @@ def pagination_probe(fetch: Callable[[str], FetchResult], settings: Settings, ba
         except Exception as e:  # noqa: BLE001
             log.info(f"{name}={value}: fetch failed {type(e).__name__}")
             continue
-        text = visible_text(r.text)
+        text = r.page_text()
         counter = parse_counter(text, settings.extract.counter_regex)
         refs = _refs(r.text)
         differs = bool(refs) and refs != base_refs
         lo_moved = bool(counter and counter[0] != 1)
-        log.info(f"{name}={value}: status={r.status} counter={counter} refs={len(refs)} differs_from_p1={differs} lo_moved={lo_moved}")
+        chal = detect_challenge(r, settings.extract.counter_regex, settings.extract.no_results_markers)
+        log.info(f"{name}={value}: status={r.status} title={r.title[:50]!r} challenge={chal or 'none'} counter={counter} "
+                 f"refs={len(refs)} differs_from_p1={differs} lo_moved={lo_moved} first_refs={sorted(refs)[:3]}")
         if lo_moved or (differs and counter is not None):
             found = name
             log.notice(f"pagination parameter appears to be '{name}' (mode={'offset' if value == '12' else 'page'})")
@@ -263,9 +288,11 @@ def coverage_probe(fetch: Callable[[str], FetchResult], settings: Settings, comm
             log.info(f"building {n}: fetch failed {type(e).__name__}")
             continue
         refs = _refs(r.text)
-        counter = parse_counter(visible_text(r.text), settings.extract.counter_regex)
+        counter = parse_counter(r.page_text(), settings.extract.counter_regex)
+        chal = detect_challenge(r, settings.extract.counter_regex, settings.extract.no_results_markers)
         union |= refs
-        log.info(f"building {n}: status={r.status} counter={counter} refs={len(refs)} subset_of_community={refs <= community_refs}")
+        log.info(f"building {n}: status={r.status} title={r.title[:40]!r} challenge={chal or 'none'} counter={counter} "
+                 f"refs={len(refs)} subset_of_community={refs <= community_refs}")
     missing = union - community_refs
     log.info(f"union of building queries={len(union)} community query p1={len(community_refs)} missing_from_community={sorted(missing)[:20]}")
     if missing:
@@ -321,11 +348,11 @@ def run(settings: Settings, root: Path) -> int:
                 describe(rb, settings, "browser_search")
                 network_report(rb)
             with log.group("BROWSER_DOM"):
-                dom_report(rb.text, settings)
+                dom_report(rb.text, settings, rb.body_text)
             browser_html = rb.text
             if not http_ok:
                 base_html, base_refs = rb.text, _refs(rb.text)
-                c = parse_counter(visible_text(rb.text), settings.extract.counter_regex)
+                c = parse_counter(rb.page_text(), settings.extract.counter_regex)
                 total = c[2] if c else total
                 fetch = lambda u: bf.get(u, b.wait_selector, settings.extract.counter_regex,  # noqa: E731
                                          settings.extract.no_results_markers, min(8, b.wait_timeout_s))
@@ -341,7 +368,7 @@ def run(settings: Settings, root: Path) -> int:
             with log.group("COVERAGE_PROBE"):
                 coverage_probe(fetch, settings, base_refs)
     with log.group("PARSED_PREVIEW"):
-        preview(base_html or browser_html, settings)
+        preview(browser_html or base_html, settings)
     log.info(f"requests used this run: {limiter.count}")
     _ = rc
     return 0

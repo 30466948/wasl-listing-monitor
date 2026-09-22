@@ -14,12 +14,15 @@ from .models import DataIssue, Degraded, RawListing
 from .normalize import (
     AED_RE,
     SQFT_RE,
+    find_rent_text,
+    find_size_text,
+    find_type_text,
     norm_text,
-    parse_bedrooms_label,
     parse_building_code,
     parse_building_name,
     parse_ref,
     parse_unit_no,
+    split_heading,
     visible_text,
 )
 
@@ -209,19 +212,15 @@ def extract_dom(html: str, settings: Settings) -> list[RawListing]:
     for card, ref in cards:
         txt = _text(card)
         f = dom.fields
-        rent_raw = _first(card, f.get("rent_raw"))
-        if not rent_raw:
-            m = AED_RE.search(txt)
-            rent_raw = m.group(0) if m else None
-        bedrooms_raw = _first(card, f.get("bedrooms_raw")) or parse_bedrooms_label(txt)
-        size_raw = _first(card, f.get("size_raw"))
-        if not size_raw:
-            m = SQFT_RE.search(txt)
-            size_raw = m.group(0) if m else None
-        building = _first(card, f.get("building")) or parse_building_name(txt)
-        building_code = _first(card, f.get("building_code")) or parse_building_code(txt)
+        rent_raw = _first(card, f.get("rent_raw")) or find_rent_text(txt)
+        bedrooms_raw = _first(card, f.get("bedrooms_raw")) or find_type_text(txt)
+        size_raw = _first(card, f.get("size_raw")) or find_size_text(txt)
+        heading = _first(card, f.get("building")) or _first(card, "h3") or _first(card, "h2")
+        code_from_heading, community_from_heading = split_heading(heading)
+        building = heading or parse_building_name(txt)
+        building_code = _first(card, f.get("building_code")) or code_from_heading or parse_building_code(txt)
         unit_no = _first(card, f.get("unit_no")) or parse_unit_no(txt)
-        community = _first(card, f.get("community"))
+        community = _first(card, f.get("community")) or community_from_heading
         location = _first(card, f.get("location"))
         unit_type = _first(card, f.get("unit_type"))
         out.append(RawListing(

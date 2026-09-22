@@ -32,10 +32,11 @@ filter:
   include_unclassified: true             # records whose rent/bedrooms cannot be parsed are alerted as "check manually"
 
 fetch:
-  strategy: auto                         # auto | requests | browser
+  strategy: browser                      # auto | requests | browser. Plain HTTP is answered by a Radware
+                                         # bot-manager captcha (discovery 2026-09-22); only Chromium gets the page.
   browser:
     wait_selector: null                  # set after discovery
-    wait_timeout_s: 20
+    wait_timeout_s: 25
     api_url_pattern: null                # regex on XHR URL whose JSON holds the listings (set after discovery)
 
 extract:
@@ -53,8 +54,12 @@ extract:
     field_map: {}                        # our field -> dotted path inside a record
     single_page: false
   dom:
-    card_selector: null                  # CSS selector for one listing card (set after discovery)
-    fields: {}                           # our field -> CSS selector inside the card
+    card_selector: "section.all-units-cards"   # one listing card (discovery 2026-09-22)
+    fields:                              # our field -> CSS selector inside the card
+      building: "h3"                     # e.g. "R441 - al barsha" (code - community)
+      location: "div.card-details span"  # e.g. "Al Barsha First"
+    # rent / bedrooms / size / unit no are read from the card's h4 labels:
+    # "Price <symbol> 101,999 / Year", "Type: 2 room flat", "Size (Sq.ft.) 1,355.00", "Unit No. 604"
   require_agreement: true
   max_disagreement_ratio: 0.10
   min_parse_ratio: 0.90

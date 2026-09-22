@@ -13,8 +13,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def settings() -> Settings:
+def wasl_settings() -> Settings:
+    """The committed production configuration (wasl card selectors, browser strategy)."""
     return load_settings(ROOT / "config.yaml", {})
+
+
+@pytest.fixture
+def settings() -> Settings:
+    """Generic-mode settings for the synthetic fixture: no card selector, HTTP strategy."""
+    s = load_settings(ROOT / "config.yaml", {})
+    s.extract.dom.card_selector = None
+    s.extract.dom.fields = {}
+    s.fetch.strategy = "auto"
+    return s
 
 
 @pytest.fixture

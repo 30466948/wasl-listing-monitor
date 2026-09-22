@@ -22,7 +22,6 @@ from .extract import (
     parse_counter,
     reconcile,
     structure_signature,
-    visible_text,
 )
 from .fetch import (
     BrowserFetcher,
@@ -108,7 +107,7 @@ def collect(settings: Settings, fetch_page: Callable[[str], FetchResult], path: 
     issues: list[DataIssue] = []
     first = fetch_page(settings.search_url(1))
     _assert_page(first, settings, "search_p1")
-    text = visible_text(first.text)
+    text = first.page_text()
     counter = parse_counter(text, ex.counter_regex)
     no_results = has_no_results_marker(text, ex.no_results_markers)
     api_sample = None
@@ -166,7 +165,7 @@ def collect(settings: Settings, fetch_page: Callable[[str], FetchResult], path: 
 def control_check(settings: Settings, fetch_page: Callable[[str], FetchResult]) -> int:
     r = fetch_page(settings.control_url())
     _assert_page(r, settings, "control")
-    counter = parse_counter(visible_text(r.text), settings.extract.counter_regex)
+    counter = parse_counter(r.page_text(), settings.extract.counter_regex)
     total = counter[2] if counter else r.ref_count
     if total < settings.source.control_min_total:
         raise Degraded(f"control_query_failed:total={total}<{settings.source.control_min_total}",
